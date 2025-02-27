@@ -1,1018 +1,667 @@
-// App.js
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import * as posenet from '@tensorflow-models/posenet';
-import '@tensorflow/tfjs';
+import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 
-function App() {
-  // Model and webcam state
-  const [isModelLoading, setIsModelLoading] = useState(true);
-  const [poseNetModel, setPoseNetModel] = useState(null);
-  const [isWebcamEnabled, setIsWebcamEnabled] = useState(false);
-  const [isWebcamLoaded, setIsWebcamLoaded] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-
-  // Posture analysis state
-  const [postureStatus, setPostureStatus] = useState('neutral'); // 'good', 'bad', 'warning', 'neutral'
-  const [postureScore, setPostureScore] = useState(100);
-  const [postureFeedback, setPostureFeedback] = useState('Calibrate your posture to begin analysis.');
-  const [calibratedPosture, setCalibratedPosture] = useState(null);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [showReferenceLines, setShowReferenceLines] = useState(true);
-
-  // Settings state
-  const [sensitivityLevel, setSensitivityLevel] = useState(2); // 1-3 (low to high)
-  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-  const [isReminderEnabled, setIsReminderEnabled] = useState(true);
-  const [reminderInterval, setReminderInterval] = useState(20); // minutes
-  const [showSettings, setShowSettings] = useState(false);
-
-  // Stats state
-  const [stats, setStats] = useState({
-    goodPostureTime: 0,
-    badPostureTime: 0,
-    currentGoodTime: 0,
-    currentBadTime: 0,
-    sessionsCount: 0,
-    lastSession: null,
-  });
-
-  // Notification state
-  const [notification, setNotification] = useState(null);
-
-  // Refs
-  const webcamRef = useRef(null);
-  const canvasRef = useRef(null);
-  const detectionIntervalRef = useRef(null);
-  const reminderTimeoutRef = useRef(null);
-  const statsIntervalRef = useRef(null);
-  const lastPostureUpdateRef = useRef(Date.now());
-  const audioRef = useRef(new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAASEhISEhISEhISEhISEhISEhISEhISEhIf39/f39/f39/f39/f39/f39/f39/f39/f3+AgICAgICAgICAgICAgICAgICAgICAgICAgKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKAAAABMYXZjNTguMTM0AAAAAAAAAAAAAAD/4ziMAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAADAAACdQCZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwAAABMYXZjNTguMjAAAAAAAAAAAAAAAAD/81TAAAAAGAAAAADAAAEAADM0AAABAAABsBvqwDQEAAAATEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/zUsBDAAG0AH+AAAIAAAP4AAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV'));
-
-  // Constants
-  const confidenceThreshold = 0.5;
-  const detectionFrequency = 100; // ms
+// Main App Component
+const App = () => {
+  const [workouts, setWorkouts] = useState([]);
+  const [currentWorkout, setCurrentWorkout] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
   
-  const sensitivitySettings = {
-    1: { // Low 
-      shoulderThreshold: 15,
-      neckThreshold: 20
-    },
-    2: { // Medium
-      shoulderThreshold: 10,
-      neckThreshold: 15
-    },
-    3: { // High
-      shoulderThreshold: 5,
-      neckThreshold: 10
-    }
-  };
-
-  // Load PoseNet model
+  // Load workouts from session storage
   useEffect(() => {
-    async function loadPoseNetModel() {
-      try {
-        setIsModelLoading(true);
-        const loadedModel = await posenet.load({
-          architecture: 'MobileNetV1',
-          outputStride: 16,
-          inputResolution: { width: 640, height: 480 },
-          multiplier: 0.75,
-          quantBytes: 2
-        });
-        
-        setPoseNetModel(loadedModel);
-        setIsModelLoading(false);
-        showNotification('success', 'PoseNet model loaded successfully!');
-      } catch (error) {
-        console.error('Error loading PoseNet model:', error);
-        setErrorMessage('Failed to load posture detection model. Please refresh the page and try again.');
-        showNotification('error', 'Failed to load posture detection model.');
-        setIsModelLoading(false);
-      }
+    const savedWorkouts = JSON.parse(sessionStorage.getItem('workouts')) || [];
+    if (savedWorkouts.length > 0) {
+      setWorkouts(savedWorkouts);
     }
     
-    loadPoseNetModel();
-    
-    return () => {
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current);
-      }
-      if (reminderTimeoutRef.current) {
-        clearTimeout(reminderTimeoutRef.current);
-      }
-      if (statsIntervalRef.current) {
-        clearInterval(statsIntervalRef.current);
-      }
+    const savedCurrentWorkout = JSON.parse(sessionStorage.getItem('currentWorkout'));
+    if (savedCurrentWorkout) {
+      setCurrentWorkout(savedCurrentWorkout);
+    }
+  }, []);
+  
+  // Save workouts to session storage whenever they change
+  useEffect(() => {
+    sessionStorage.setItem('workouts', JSON.stringify(workouts));
+  }, [workouts]);
+  
+  // Save current workout to session storage whenever it changes
+  useEffect(() => {
+    if (currentWorkout) {
+      sessionStorage.setItem('currentWorkout', JSON.stringify(currentWorkout));
+    } else {
+      sessionStorage.removeItem('currentWorkout');
+    }
+  }, [currentWorkout]);
+  
+  const startNewWorkout = () => {
+    const newWorkout = {
+      id: Date.now(),
+      date: new Date().toISOString(),
+      exercises: [],
+      notes: '',
+      completed: false
     };
-  }, []);
-
-  // Load stats from localStorage
-  useEffect(() => {
-    try {
-      const savedStats = localStorage.getItem('postureStats');
-      if (savedStats) {
-        const parsedStats = JSON.parse(savedStats);
-        setStats(prevStats => ({
-          ...prevStats,
-          goodPostureTime: parsedStats.goodPostureTime || 0,
-          badPostureTime: parsedStats.badPostureTime || 0,
-          sessionsCount: parsedStats.sessionsCount || 0,
-          lastSession: parsedStats.lastSession || null
-        }));
-      }
-    } catch (e) {
-      console.log('Could not load stats from localStorage', e);
-    }
-  }, []);
-
-  // Save stats to localStorage when they change
-  useEffect(() => {
-    if (stats.goodPostureTime > 0 || stats.badPostureTime > 0 || stats.sessionsCount > 0) {
-      try {
-        localStorage.setItem('postureStats', JSON.stringify({
-          goodPostureTime: stats.goodPostureTime,
-          badPostureTime: stats.badPostureTime,
-          sessionsCount: stats.sessionsCount,
-          lastSession: stats.lastSession
-        }));
-      } catch (e) {
-        console.log('Could not save stats to localStorage', e);
-      }
-    }
-  }, [stats]);
-
-  // Handle window resize
-  useEffect(() => {
-    function handleResize() {
-      adjustCanvasSize();
-    }
+    setCurrentWorkout(newWorkout);
+    setShowHistory(false);
+  };
+  
+  const addExercise = (exerciseName) => {
+    if (!exerciseName.trim()) return;
     
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Setup webcam
-  const setupWebcam = async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setErrorMessage('Your browser does not support webcam access. Please try another browser.');
-      showNotification('error', 'Your browser does not support webcam access.');
-      return;
-    }
+    const newExercise = {
+      id: Date.now(),
+      name: exerciseName,
+      sets: []
+    };
     
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user',
-        },
-        audio: false
-      });
-      
-      if (webcamRef.current) {
-        webcamRef.current.srcObject = stream;
-        webcamRef.current.onloadedmetadata = () => {
-          setIsWebcamLoaded(true);
-          adjustCanvasSize();
-          showNotification('success', 'Camera connected successfully!');
+    setCurrentWorkout({
+      ...currentWorkout,
+      exercises: [...currentWorkout.exercises, newExercise]
+    });
+  };
+  
+  const addSet = (exerciseId, weight, reps) => {
+    const newSet = {
+      id: Date.now(),
+      weight: Number(weight),
+      reps: Number(reps),
+      timestamp: new Date().toISOString()
+    };
+    
+    const updatedExercises = currentWorkout.exercises.map(exercise => {
+      if (exercise.id === exerciseId) {
+        return {
+          ...exercise,
+          sets: [...exercise.sets, newSet]
         };
       }
-      
-      setIsWebcamEnabled(true);
-    } catch (error) {
-      console.error('Error accessing webcam:', error);
-      
-      let message = 'Failed to access webcam.';
-      if (error.name === 'NotAllowedError') {
-        message = 'Camera access was denied. Please allow camera access and try again.';
-      } else if (error.name === 'NotFoundError') {
-        message = 'No camera detected. Please connect a camera and try again.';
-      }
-      
-      setErrorMessage(message);
-      showNotification('error', message);
-    }
-  };
-
-  // Stop webcam
-  const stopWebcam = () => {
-    if (webcamRef.current && webcamRef.current.srcObject) {
-      const tracks = webcamRef.current.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
-      webcamRef.current.srcObject = null;
-      setIsWebcamEnabled(false);
-      setIsWebcamLoaded(false);
-      
-      // Stop detection if it's running
-      if (isDetecting) {
-        stopPostureDetection();
-      }
-      
-      // Clear canvas
-      if (canvasRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      }
-    }
-  };
-
-  // Adjust canvas size
-  const adjustCanvasSize = () => {
-    if (!isWebcamLoaded || !webcamRef.current || !webcamRef.current.videoWidth) return;
+      return exercise;
+    });
     
-    const videoWidth = webcamRef.current.videoWidth;
-    const videoHeight = webcamRef.current.videoHeight;
-    
-    if (canvasRef.current) {
-      canvasRef.current.width = videoWidth;
-      canvasRef.current.height = videoHeight;
-    }
+    setCurrentWorkout({
+      ...currentWorkout,
+      exercises: updatedExercises
+    });
   };
-
-  // Calibrate posture
-  const calibratePosture = async () => {
-    if (!poseNetModel || !isWebcamEnabled || !isWebcamLoaded) {
-      showNotification('warning', 'Please enable webcam first to calibrate your posture.');
-      return;
-    }
-    
-    try {
-      showNotification('info', 'Sit with good posture for calibration...');
-      
-      // Delay a bit to allow user to get in position
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const pose = await detectPose();
-      
-      if (!pose) {
-        showNotification('error', 'Could not detect your pose. Please make sure you are visible in the camera.');
-        return;
-      }
-      
-      // Extract key points for calibration
-      const keypoints = extractKeyPosturePoints(pose);
-      
-      if (!isValidPoseForCalibration(keypoints)) {
-        showNotification('warning', 'Could not detect key points clearly. Please adjust your position and try again.');
-        return;
-      }
-      
-      setCalibratedPosture(keypoints);
-      showNotification('success', 'Posture calibrated successfully! Start monitoring to analyze your posture.');
-      
-      // Reset posture score after calibration
-      setPostureScore(100);
-      setPostureStatus('good');
-      setPostureFeedback('Posture calibrated. Start monitoring to begin tracking.');
-      
-    } catch (error) {
-      console.error('Error during calibration:', error);
-      showNotification('error', 'Calibration failed. Please try again.');
-    }
-  };
-
-  // Check if pose has all required keypoints for calibration
-  const isValidPoseForCalibration = (keypoints) => {
-    // Check if all required keypoints are present with sufficient confidence
-    const requiredKeypoints = ['leftShoulder', 'rightShoulder', 'leftEar', 'rightEar', 'nose'];
-    
-    return requiredKeypoints.every(keypoint => 
-      keypoints[keypoint] && keypoints[keypoint].confidence > confidenceThreshold
+  
+  const removeExercise = (exerciseId) => {
+    const updatedExercises = currentWorkout.exercises.filter(
+      exercise => exercise.id !== exerciseId
     );
-  };
-
-  // Extract key posture points from pose
-  const extractKeyPosturePoints = (pose) => {
-    const { keypoints } = pose;
     
-    // Convert array of keypoints to object for easier access
-    const keypointMap = {};
-    keypoints.forEach(point => {
-      keypointMap[point.part] = {
-        x: point.position.x,
-        y: point.position.y,
-        confidence: point.score
-      };
+    setCurrentWorkout({
+      ...currentWorkout,
+      exercises: updatedExercises
+    });
+  };
+  
+  const removeSet = (exerciseId, setId) => {
+    const updatedExercises = currentWorkout.exercises.map(exercise => {
+      if (exercise.id === exerciseId) {
+        return {
+          ...exercise,
+          sets: exercise.sets.filter(set => set.id !== setId)
+        };
+      }
+      return exercise;
     });
     
-    return keypointMap;
+    setCurrentWorkout({
+      ...currentWorkout,
+      exercises: updatedExercises
+    });
   };
-
-  // Detect pose from webcam
-  const detectPose = async () => {
-    if (!poseNetModel || !webcamRef.current || !isWebcamLoaded) return null;
-    
-    try {
-      const pose = await poseNetModel.estimateSinglePose(webcamRef.current, {
-        flipHorizontal: true
-      });
-      
-      return pose;
-    } catch (error) {
-      console.error('Error detecting pose:', error);
-      return null;
-    }
+  
+  const updateNotes = (notes) => {
+    setCurrentWorkout({
+      ...currentWorkout,
+      notes: notes
+    });
   };
-
-  // Start posture detection
-  const startPostureDetection = () => {
-    if (!poseNetModel || !isWebcamEnabled || !isWebcamLoaded) {
-      showNotification('warning', 'Please enable webcam first to start posture detection.');
+  
+  const completeWorkout = () => {
+    if (currentWorkout.exercises.length === 0) {
+      alert('Add at least one exercise before completing the workout');
       return;
     }
     
-    if (!calibratedPosture) {
-      showNotification('warning', 'Please calibrate your posture first before starting detection.');
-      return;
-    }
+    const completedWorkout = {
+      ...currentWorkout,
+      completed: true,
+      endTime: new Date().toISOString()
+    };
     
-    setIsDetecting(true);
-    
-    // Start detection interval
-    detectionIntervalRef.current = setInterval(async () => {
-      const pose = await detectPose();
-      
-      if (pose) {
-        analyzePose(pose);
-        drawPose(pose);
-      }
-    }, detectionFrequency);
-    
-    // Start stats update interval
-    statsIntervalRef.current = setInterval(() => {
-      setStats(prevStats => ({
-        ...prevStats
-      }));
-    }, 1000);
-    
-    // Increment sessions count
-    setStats(prevStats => ({
-      ...prevStats,
-      sessionsCount: prevStats.sessionsCount + 1,
-      lastSession: new Date().toISOString()
-    }));
-    
-    // Set reminder timeout if enabled
-    if (isReminderEnabled) {
-      setReminderTimeout();
-    }
-    
-    showNotification('success', 'Posture monitoring started!');
+    setWorkouts([...workouts, completedWorkout]);
+    setCurrentWorkout(null);
   };
-
-  // Stop posture detection
-  const stopPostureDetection = () => {
-    setIsDetecting(false);
-    
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current);
-      detectionIntervalRef.current = null;
-    }
-    
-    if (statsIntervalRef.current) {
-      clearInterval(statsIntervalRef.current);
-      statsIntervalRef.current = null;
-    }
-    
-    if (reminderTimeoutRef.current) {
-      clearTimeout(reminderTimeoutRef.current);
-      reminderTimeoutRef.current = null;
-    }
-    
-    // Update total time stats
-    setStats(prevStats => ({
-      ...prevStats,
-      goodPostureTime: prevStats.goodPostureTime + prevStats.currentGoodTime,
-      badPostureTime: prevStats.badPostureTime + prevStats.currentBadTime,
-      currentGoodTime: 0,
-      currentBadTime: 0
-    }));
-    
-    // Clear canvas
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
-    
-    showNotification('info', 'Posture monitoring stopped.');
-  };
-
-  // Set reminder timeout
-  const setReminderTimeout = () => {
-    if (reminderTimeoutRef.current) {
-      clearTimeout(reminderTimeoutRef.current);
-    }
-    
-    reminderTimeoutRef.current = setTimeout(() => {
-      if (isDetecting && isReminderEnabled) {
-        showNotification('info', 'Posture check reminder: Take a moment to check your posture!');
-        
-        if (isAudioEnabled) {
-          playNotificationSound();
-        }
-        
-        // Set the next reminder
-        setReminderTimeout();
-      }
-    }, reminderInterval * 60 * 1000); // Convert minutes to milliseconds
-  };
-
-  // Play notification sound
-  const playNotificationSound = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(err => console.error('Error playing audio:', err));
+  
+  const discardWorkout = () => {
+    if (window.confirm('Are you sure you want to discard this workout?')) {
+      setCurrentWorkout(null);
     }
   };
-
-  // Show notification
-  const showNotification = (type, message) => {
-    setNotification({ type, message, id: Date.now() });
-    
-    // Auto hide notification after 5 seconds
-    setTimeout(() => {
-      setNotification(null);
-    }, 5000);
-  };
-
-  // Analyze pose and determine posture quality
-  const analyzePose = (pose) => {
-    if (!calibratedPosture) return;
-    
-    const currentKeypoints = extractKeyPosturePoints(pose);
-    
-    // Verify key points are detected with enough confidence
-    if (!isValidPoseForCalibration(currentKeypoints)) {
-      setPostureFeedback('Not all key points detected. Please adjust your position.');
-      return;
-    }
-    
-    // Calculate shoulder tilt
-    const leftShoulder = currentKeypoints.leftShoulder;
-    const rightShoulder = currentKeypoints.rightShoulder;
-    const shoulderTiltAngle = Math.abs(Math.atan2(
-      rightShoulder.y - leftShoulder.y,
-      rightShoulder.x - leftShoulder.x
-    ) * (180 / Math.PI));
-    
-    // Calculate neck tilt (using ears and nose)
-    const leftEar = currentKeypoints.leftEar;
-    const rightEar = currentKeypoints.rightEar;
-    const nose = currentKeypoints.nose;
-    
-    // Calculate midpoint between ears
-    const earMidpointX = (leftEar.x + rightEar.x) / 2;
-    const earMidpointY = (leftEar.y + rightEar.y) / 2;
-    
-    // Calculate angle between vertical and nose-to-midpoint
-    const neckTiltAngle = Math.abs(Math.atan2(
-      nose.y - earMidpointY,
-      nose.x - earMidpointX
-    ) * (180 / Math.PI));
-    
-    // Get thresholds based on sensitivity
-    const { shoulderThreshold, neckThreshold } = sensitivitySettings[sensitivityLevel];
-    
-    // Determine posture quality based on angles and thresholds
-    let isGoodPosture = true;
-    let feedback = '';
-    
-    if (shoulderTiltAngle > shoulderThreshold) {
-      isGoodPosture = false;
-      feedback = 'Shoulders are uneven. Try to level your shoulders.';
-    }
-    
-    if (neckTiltAngle > neckThreshold) {
-      isGoodPosture = false;
-      feedback = feedback || 'Head is tilted. Try to keep your head centered.';
-    }
-    
-    // Check vertical alignment between shoulders and ears
-    const calibratedShoulderY = (calibratedPosture.leftShoulder.y + calibratedPosture.rightShoulder.y) / 2;
-    const calibratedEarY = (calibratedPosture.leftEar.y + calibratedPosture.rightEar.y) / 2;
-    const calibratedVerticalDiff = calibratedEarY - calibratedShoulderY;
-    
-    const currentShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-    const currentEarY = (leftEar.y + rightEar.y) / 2;
-    const currentVerticalDiff = currentEarY - currentShoulderY;
-    
-    // Check if person is slouching (ears moved lower relative to shoulders)
-    const verticalChangeThreshold = 20;
-    const verticalChange = calibratedVerticalDiff - currentVerticalDiff;
-    
-    if (verticalChange > verticalChangeThreshold) {
-      isGoodPosture = false;
-      feedback = 'You appear to be slouching. Try sitting up straight.';
-    }
-    
-    // Update posture status
-    const now = Date.now();
-    const timeDelta = (now - lastPostureUpdateRef.current) / 1000; // seconds
-    lastPostureUpdateRef.current = now;
-    
-    // Update good/bad posture time
-    if (isGoodPosture) {
-      setStats(prevStats => ({
-        ...prevStats,
-        currentGoodTime: prevStats.currentGoodTime + timeDelta
-      }));
-      
-      setPostureStatus('good');
-      setPostureFeedback(feedback || 'Good posture! Keep it up!');
-      
-      // Gradually increase score if it's below max
-      if (postureScore < 100) {
-        setPostureScore(prev => Math.min(100, prev + 1));
-      }
-    } else {
-      setStats(prevStats => ({
-        ...prevStats,
-        currentBadTime: prevStats.currentBadTime + timeDelta
-      }));
-      
-      // Determine if it's warning or bad status based on score
-      if (postureScore > 50) {
-        setPostureStatus('warning');
-      } else {
-        setPostureStatus('bad');
-        
-        // Play sound alert for bad posture if enabled and not already at minimum score
-        if (isAudioEnabled && postureScore > 20) {
-          playNotificationSound();
-        }
-      }
-      
-      setPostureFeedback(feedback || 'Posture needs correction.');
-      
-      // Decrease score based on severity and sensitivity
-      const decreaseAmount = Math.max(1, 3 * sensitivityLevel);
-      setPostureScore(prev => Math.max(0, prev - decreaseAmount));
+  
+  const viewWorkoutDetails = (workoutId) => {
+    const workout = workouts.find(w => w.id === workoutId);
+    if (workout) {
+      setCurrentWorkout(workout);
+      setShowHistory(false);
     }
   };
-
-  // Draw pose on canvas
-  const drawPose = (pose) => {
-    if (!canvasRef.current || !webcamRef.current) return;
-    
-    const ctx = canvasRef.current.getContext('2d');
-    const videoWidth = webcamRef.current.videoWidth;
-    const videoHeight = webcamRef.current.videoHeight;
-    
-    // Set canvas dimensions to match video
-    if (canvasRef.current.width !== videoWidth || canvasRef.current.height !== videoHeight) {
-      canvasRef.current.width = videoWidth;
-      canvasRef.current.height = videoHeight;
-    }
-    
-    // Clear previous drawing
-    ctx.clearRect(0, 0, videoWidth, videoHeight);
-    
-    if (!showReferenceLines) return;
-    
-    // Draw keypoints and connections
-    const { keypoints } = pose;
-    
-    // Define connections to draw
-    const connections = [
-      ['leftShoulder', 'rightShoulder'],
-      ['leftShoulder', 'leftElbow'],
-      ['rightShoulder', 'rightElbow'],
-      ['leftShoulder', 'leftHip'],
-      ['rightShoulder', 'rightHip'],
-      ['leftEar', 'leftShoulder'],
-      ['rightEar', 'rightShoulder'],
-      ['leftEar', 'leftEye'],
-      ['rightEar', 'rightEye'],
-      ['leftEye', 'nose'],
-      ['rightEye', 'nose'],
-    ];
-    
-    // Convert keypoints array to map for easier lookup
-    const keypointMap = {};
-    keypoints.forEach(keypoint => {
-      keypointMap[keypoint.part] = keypoint;
-    });
-    
-    // Draw connections
-    ctx.lineWidth = 2;
-    connections.forEach(([p1, p2]) => {
-      const point1 = keypointMap[p1];
-      const point2 = keypointMap[p2];
-      
-      if (point1 && point2 && point1.score > confidenceThreshold && point2.score > confidenceThreshold) {
-        ctx.beginPath();
-        ctx.moveTo(point1.position.x, point1.position.y);
-        ctx.lineTo(point2.position.x, point2.position.y);
-        
-        // Color based on posture status
-        if (postureStatus === 'good') {
-          ctx.strokeStyle = '#34D399'; // Green
-        } else if (postureStatus === 'warning') {
-          ctx.strokeStyle = '#FBBF24'; // Yellow
-        } else {
-          ctx.strokeStyle = '#F87171'; // Red
-        }
-        
-        ctx.stroke();
-      }
-    });
-    
-    // Draw keypoints
-    keypoints.forEach(keypoint => {
-      if (keypoint.score > confidenceThreshold) {
-        ctx.beginPath();
-        ctx.arc(keypoint.position.x, keypoint.position.y, 4, 0, 2 * Math.PI);
-        
-        // Color based on type of keypoint
-        if (['nose', 'leftEye', 'rightEye', 'leftEar', 'rightEar'].includes(keypoint.part)) {
-          ctx.fillStyle = '#5D5CDE'; // Primary color for face points
-        } else {
-          // Color based on posture status for body points
-          if (postureStatus === 'good') {
-            ctx.fillStyle = '#34D399'; // Green
-          } else if (postureStatus === 'warning') {
-            ctx.fillStyle = '#FBBF24'; // Yellow
-          } else {
-            ctx.fillStyle = '#F87171'; // Red
-          }
-        }
-        
-        ctx.fill();
-      }
-    });
-    
-    // Draw vertical reference line if calibrated
-    if (calibratedPosture) {
-      const nose = keypointMap.nose;
-      if (nose && nose.score > confidenceThreshold) {
-        const midShouldersX = (keypointMap.leftShoulder.position.x + keypointMap.rightShoulder.position.x) / 2;
-        
-        ctx.beginPath();
-        ctx.moveTo(midShouldersX, 0);
-        ctx.lineTo(midShouldersX, videoHeight);
-        ctx.setLineDash([5, 5]); // Dashed line
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)'; // Gray with transparency
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-  };
-
-  // Format time (seconds to human-readable string)
-  const formatTime = (seconds) => {
-    if (seconds < 60) {
-      return `${Math.round(seconds)}s`;
-    }
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.round(seconds % 60);
-    return `${minutes}m ${remainingSeconds}s`;
-  };
-
-  // Format date
-  const formatDate = (isoString) => {
-    if (!isoString) return 'Never';
-    try {
-      return new Date(isoString).toLocaleString();
-    } catch (e) {
-      return 'Invalid date';
-    }
-  };
-
-  // Calculate posture ratio
-  const calculatePostureRatio = () => {
-    const totalGoodTime = stats.goodPostureTime + stats.currentGoodTime;
-    const totalBadTime = stats.badPostureTime + stats.currentBadTime;
-    const totalTime = totalGoodTime + totalBadTime;
-    
-    if (totalTime === 0) return 0;
-    return Math.round((totalGoodTime / totalTime) * 100);
-  };
-
-  // Toggle settings panel
-  const toggleSettings = () => {
-    setShowSettings(!showSettings);
-  };
-
-  // Notification component
-  const Notification = ({ type, message, onClose }) => {
-    return (
-      <div className={`notification notification-${type}`}>
-        <div className="notification-text">{message}</div>
-        <button className="notification-close" onClick={onClose}>✕</button>
-      </div>
-    );
-  };
-
+  
   return (
-    <div className="container">
-      <header className="header">
-        <h1>Posture Analyzer</h1>
-        <p>Monitor and improve your sitting posture using AI</p>
+    <div className="container mx-auto px-4 py-6 max-w-4xl">
+      <header className="mb-8 text-center">
+        <h1 className="text-3xl font-bold mb-2 text-primary dark:text-primary">
+          <i className="fas fa-dumbbell mr-2"></i>Workout Tracker
+        </h1>
+        <p className="text-gray-600 dark:text-gray-300">Record and track your fitness progress</p>
       </header>
-
-      <div className="main-content">
-        <div className="webcam-section">
-          {/* Webcam and canvas container */}
-          <div className="card">
-            {errorMessage && (
-              <div className="error-message">{errorMessage}</div>
-            )}
-
-            <div className="webcam-container">
-              {/* Loading state for model */}
-              {isModelLoading && (
-                <div className="camera-placeholder">
-                  <div className="spinner"></div>
-                  <p className="mt-4 text-muted">Loading posture detection model...</p>
-                </div>
-              )}
-
-              {/* Camera permission state */}
-              {!isModelLoading && !isWebcamEnabled && (
-                <div className="camera-placeholder">
-                  <svg className="camera-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  <p className="mb-4 text-muted">Enable your webcam to start analyzing your posture</p>
-                  <button className="btn btn-primary" onClick={setupWebcam}>Enable Camera</button>
-                </div>
-              )}
-
-              {/* Camera loading state */}
-              {!isModelLoading && isWebcamEnabled && !isWebcamLoaded && (
-                <div className="skeleton-loader"></div>
-              )}
-
-              {/* Actual webcam and canvas */}
-              <video 
-                ref={webcamRef}
-                id="webcam"
-                autoPlay
-                playsInline
-                style={{ display: isWebcamLoaded ? 'block' : 'none' }}
-              />
-              <canvas 
-                ref={canvasRef}
-                id="canvas"
-                style={{ display: isWebcamLoaded ? 'block' : 'none' }}
-              />
-            </div>
-
-            {/* Posture status indicator */}
-            {isWebcamLoaded && (
-              <div className="posture-indicator">
-                <div className="flex justify-between items-center mb-2">
-                  <h2 className="text-lg font-semibold flex items-center">
-                    Posture Status: 
-                    <span className={`badge badge-${postureStatus}`}>
-                      {postureStatus === 'good' ? 'Good' : 
-                       postureStatus === 'warning' ? 'Warning' : 
-                       postureStatus === 'bad' ? 'Bad' : 'Not Detected'}
-                    </span>
-                  </h2>
-                  <div className="text-right">
-                    <span className="text-sm text-muted">Posture Score</span>
-                    <div className="text-xl font-bold">{postureScore}</div>
-                  </div>
-                </div>
-                
-                <div className="progress-track">
-                  <div 
-                    className="progress-fill" 
-                    style={{ 
-                      width: `${postureScore}%`,
-                      backgroundColor: postureScore > 75 ? '#34D399' : postureScore > 40 ? '#FBBF24' : '#F87171'
-                    }}
-                  ></div>
-                </div>
-                
-                <p className="posture-status">
-                  {postureFeedback}
-                </p>
-              </div>
-            )}
-
-            {/* Control buttons */}
-            {isWebcamLoaded && (
-              <div className="btn-group">
-                {!isDetecting ? (
-                  <>
-                    <button
-                      className="btn btn-warning"
-                      onClick={calibratePosture}
-                    >
-                      Calibrate Posture
-                    </button>
-                    <button
-                      className="btn btn-success"
-                      onClick={startPostureDetection}
-                      disabled={!calibratedPosture}
-                    >
-                      Start Monitoring
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="btn btn-danger"
-                    onClick={stopPostureDetection}
-                  >
-                    Stop Monitoring
-                  </button>
-                )}
-                <button
-                  className="btn btn-gray"
-                  onClick={() => setShowReferenceLines(!showReferenceLines)}
-                >
-                  {showReferenceLines ? 'Hide Skeleton' : 'Show Skeleton'}
-                </button>
-                <button
-                  className="btn btn-primary ml-auto"
-                  onClick={toggleSettings}
-                >
-                  Settings
-                </button>
-                <button
-                  className="btn btn-gray"
-                  onClick={stopWebcam}
-                >
-                  Disable Camera
-                </button>
-              </div>
-            )}
+      
+      {!currentWorkout && !showHistory && (
+        <div className="flex flex-col items-center justify-center space-y-6 py-12">
+          <button 
+            onClick={startNewWorkout}
+            className="bg-primary hover:bg-primary-hover text-white font-medium rounded-lg text-xl px-8 py-4 transition-colors duration-200 flex items-center"
+          >
+            <i className="fas fa-plus-circle mr-2"></i>
+            Start New Workout
+          </button>
+          
+          {workouts.length > 0 && (
+            <button 
+              onClick={() => setShowHistory(true)}
+              className="mt-4 text-primary dark:text-primary hover:underline font-medium flex items-center"
+            >
+              <i className="fas fa-history mr-2"></i>
+              View Workout History
+            </button>
+          )}
+        </div>
+      )}
+      
+      {currentWorkout && !currentWorkout.completed && (
+        <WorkoutForm 
+          workout={currentWorkout}
+          addExercise={addExercise}
+          addSet={addSet}
+          removeExercise={removeExercise}
+          removeSet={removeSet}
+          updateNotes={updateNotes}
+          completeWorkout={completeWorkout}
+          discardWorkout={discardWorkout}
+        />
+      )}
+      
+      {currentWorkout && currentWorkout.completed && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-2xl font-bold">Workout Details</h2>
+            <button 
+              onClick={() => setCurrentWorkout(null)}
+              className="text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary"
+            >
+              <i className="fas fa-times-circle text-xl"></i>
+            </button>
           </div>
-
-          {/* Session stats */}
-          <div className="card">
-            <h2 className="section-title">Session Statistics</h2>
-            
-            <div className="stats-grid">
-              <div className="stat-card">
-                <h3>Current Session</h3>
-                <p>{formatTime(stats.currentGoodTime + stats.currentBadTime)}</p>
-              </div>
-              <div className="stat-card">
-                <h3>Good Posture</h3>
-                <p className="good-posture-text">
-                  {formatTime(stats.goodPostureTime + stats.currentGoodTime)}
-                </p>
-              </div>
-              <div className="stat-card">
-                <h3>Bad Posture</h3>
-                <p className="bad-posture-text">
-                  {formatTime(stats.badPostureTime + stats.currentBadTime)}
-                </p>
-              </div>
-              <div className="stat-card">
-                <h3>Posture Ratio</h3>
-                <p>{calculatePostureRatio()}%</p>
-              </div>
-            </div>
-            
-            <div className="stats-grid mt-4">
-              <div className="stat-card">
-                <h3>Total Sessions</h3>
-                <p>{stats.sessionsCount}</p>
-              </div>
-              <div className="stat-card">
-                <h3>Last Session</h3>
-                <p>{formatDate(stats.lastSession)}</p>
-              </div>
-            </div>
+          <WorkoutSummary workout={currentWorkout} />
+          <div className="mt-6 text-center">
+            <button 
+              onClick={() => setCurrentWorkout(null)}
+              className="bg-primary hover:bg-primary-hover text-white font-medium rounded-lg px-5 py-2.5 transition-colors duration-200"
+            >
+              Back to Dashboard
+            </button>
           </div>
         </div>
-
-        {/* Settings panel */}
-        <div className={`settings-panel ${showSettings ? 'open' : ''}`}>
-          <div className="p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-primary">Settings</h2>
-              <button 
-                className="close-settings-btn"
-                onClick={toggleSettings}
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="space-y-6">
-              {/* Sensitivity settings */}
-              <div>
-                <h3 className="text-lg font-medium mb-2">Sensitivity</h3>
-                <p className="text-sm text-muted mb-2">
-                  Adjust how strictly your posture is analyzed.
-                </p>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">Low</span>
-                  <div className="flex gap-2">
-                    {[1, 2, 3].map(level => (
-                      <button
-                        key={level}
-                        className={`sensitivity-level ${sensitivityLevel === level ? 'active' : ''}`}
-                        onClick={() => setSensitivityLevel(level)}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="text-sm">High</span>
-                </div>
-              </div>
-              
-              {/* Reminders & Notifications */}
-              <div>
-                <h3 className="text-lg font-medium mb-2">Reminders & Alerts</h3>
-                
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">Audio Alerts</p>
-                      <p className="text-sm text-muted">
-                        Play sound for bad posture detection
-                      </p>
-                    </div>
-                    <label className="toggle-switch">
-                      <input 
-                        type="checkbox" 
-                        checked={isAudioEnabled}
-                        onChange={() => setIsAudioEnabled(!isAudioEnabled)}
-                      />
-                      <span className="toggle-slider"></span>
-                    </label>
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">Posture Reminders</p>
-                      <p className="text-sm text-muted">
-                        Periodic reminders to check posture
-                      </p>
-                    </div>
-                    <label className="toggle-switch">
-                      <input 
-                        type="checkbox" 
-                        checked={isReminderEnabled}
-                        onChange={() => setIsReminderEnabled(!isReminderEnabled)}
-                      />
-                      <span className="toggle-slider"></span>
-                    </label>
-                  </div>
-                  
-                  {isReminderEnabled && (
-                    <div>
-                      <p className="font-medium mb-1">Reminder Interval</p>
-                      <div className="flex items-center">
-                        <input
-                          type="range"
-                          min="5"
-                          max="60"
-                          step="5"
-                          value={reminderInterval}
-                          onChange={(e) => setReminderInterval(parseInt(e.target.value, 10))}
-                          className="w-full"
-                        />
-                        <span className="ml-2 text-sm text-muted">
-                          {reminderInterval} min
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              {/* Tips section */}
-              <div>
-                <h3 className="text-lg font-medium mb-2">Quick Tips</h3>
-                <ul className="list-disc space-y-1 text-sm">
-                  <li>Sit with your back straight and shoulders relaxed</li>
-                  <li>Position your screen at eye level</li>
-                  <li>Keep your feet flat on the floor</li>
-                  <li>Take short breaks every 30 minutes</li>
-                  <li>Do quick stretches during breaks</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <footer className="footer">
-        <p>Created with React and TensorFlow.js</p>
-        <p className="mt-1">Note: This application processes all data locally in your browser. No video is uploaded or stored.</p>
-      </footer>
-
-      {/* Notification */}
-      {notification && (
-        <Notification
-          type={notification.type}
-          message={notification.message}
-          onClose={() => setNotification(null)}
+      )}
+      
+      {showHistory && (
+        <WorkoutHistory 
+          workouts={workouts} 
+          viewWorkoutDetails={viewWorkoutDetails}
+          goBack={() => setShowHistory(false)}
         />
       )}
     </div>
   );
-}
+};
+
+// Workout Form Component
+const WorkoutForm = ({ 
+  workout, 
+  addExercise, 
+  addSet, 
+  removeExercise, 
+  removeSet, 
+  updateNotes, 
+  completeWorkout, 
+  discardWorkout 
+}) => {
+  const [newExerciseName, setNewExerciseName] = useState('');
+  const [activeExercise, setActiveExercise] = useState(null);
+  const [weight, setWeight] = useState('');
+  const [reps, setReps] = useState('');
+  const exerciseInputRef = useRef(null);
+  
+  const handleAddExercise = (e) => {
+    e.preventDefault();
+    if (!newExerciseName.trim()) {
+      if (exerciseInputRef.current) {
+        exerciseInputRef.current.classList.add('shake');
+        setTimeout(() => {
+          exerciseInputRef.current.classList.remove('shake');
+        }, 500);
+      }
+      return;
+    }
+    
+    addExercise(newExerciseName);
+    setNewExerciseName('');
+  };
+  
+  const handleAddSet = (e, exerciseId) => {
+    e.preventDefault();
+    if (!weight || !reps) return;
+    
+    addSet(exerciseId, weight, reps);
+    setWeight('');
+    setReps('');
+  };
+  
+  const toggleExercise = (exerciseId) => {
+    if (activeExercise === exerciseId) {
+      setActiveExercise(null);
+    } else {
+      setActiveExercise(exerciseId);
+    }
+  };
+  
+  const formatDate = (dateString) => {
+    const options = { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+  
+  return (
+    <div className="workout-container bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+      <div className="mb-6">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="text-2xl font-bold">Current Workout</h2>
+          <span className="text-sm text-gray-600 dark:text-gray-300">
+            {formatDate(workout.date)}
+          </span>
+        </div>
+        <div className="h-1 w-full bg-primary rounded-full"></div>
+      </div>
+      
+      <form onSubmit={handleAddExercise} className="mb-6">
+        <label htmlFor="exercise-name" className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+          Add Exercise
+        </label>
+        <div className="flex">
+          <input
+            type="text"
+            id="exercise-name"
+            ref={exerciseInputRef}
+            className="bg-gray-50 border border-gray-300 text-gray-900 text-base rounded-lg focus:ring-primary focus:border-primary block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary dark:focus:border-primary"
+            placeholder="e.g., Bench Press, Squat, Deadlift"
+            value={newExerciseName}
+            onChange={(e) => setNewExerciseName(e.target.value)}
+            required
+          />
+          <button
+            type="submit"
+            className="ml-2 text-white bg-primary hover:bg-primary-hover focus:ring-4 focus:outline-none focus:ring-primary/50 font-medium rounded-lg text-sm px-4 py-2.5 text-center inline-flex items-center"
+          >
+            <i className="fas fa-plus mr-1"></i> Add
+          </button>
+        </div>
+      </form>
+      
+      {workout.exercises.length === 0 ? (
+        <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+          <i className="fas fa-dumbbell text-4xl mb-4"></i>
+          <p>No exercises added yet. Start by adding an exercise above.</p>
+        </div>
+      ) : (
+        <div className="space-y-4 mb-6">
+          {workout.exercises.map(exercise => (
+            <div key={exercise.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+              <div 
+                className="flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-700 cursor-pointer"
+                onClick={() => toggleExercise(exercise.id)}
+              >
+                <h3 className="text-lg font-semibold">{exercise.name}</h3>
+                <div className="flex items-center">
+                  <span className="text-sm text-gray-600 dark:text-gray-300 mr-3">
+                    {exercise.sets.length} {exercise.sets.length === 1 ? 'set' : 'sets'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeExercise(exercise.id);
+                    }}
+                    className="text-red-500 hover:text-red-700 dark:hover:text-red-400 mr-2"
+                    aria-label="Remove exercise"
+                  >
+                    <i className="fas fa-trash-alt"></i>
+                  </button>
+                  <i className={`fas ${activeExercise === exercise.id ? 'fa-chevron-up' : 'fa-chevron-down'} text-gray-500`}></i>
+                </div>
+              </div>
+              
+              {activeExercise === exercise.id && (
+                <div className="p-4 bg-white dark:bg-gray-800">
+                  {exercise.sets.length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="font-medium mb-2 text-sm text-gray-600 dark:text-gray-300">Sets</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+                          <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
+                            <tr>
+                              <th scope="col" className="px-3 py-2">Set</th>
+                              <th scope="col" className="px-3 py-2">Weight</th>
+                              <th scope="col" className="px-3 py-2">Reps</th>
+                              <th scope="col" className="px-3 py-2">Time</th>
+                              <th scope="col" className="px-3 py-2">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {exercise.sets.map((set, index) => (
+                              <tr key={set.id} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                                <td className="px-3 py-2">{index + 1}</td>
+                                <td className="px-3 py-2">{set.weight} kg</td>
+                                <td className="px-3 py-2">{set.reps}</td>
+                                <td className="px-3 py-2">
+                                  {new Date(set.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button
+                                    onClick={() => removeSet(exercise.id, set.id)}
+                                    className="text-red-500 hover:text-red-700 dark:hover:text-red-400"
+                                    aria-label="Remove set"
+                                  >
+                                    <i className="fas fa-times"></i>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <form onSubmit={(e) => handleAddSet(e, exercise.id)}>
+                    <h4 className="font-medium mb-2 text-sm text-gray-600 dark:text-gray-300">Add Set</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label htmlFor={`weight-${exercise.id}`} className="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                          Weight (kg)
+                        </label>
+                        <input
+                          type="number"
+                          id={`weight-${exercise.id}`}
+                          className="bg-gray-50 border border-gray-300 text-gray-900 text-base rounded-lg focus:ring-primary focus:border-primary block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary dark:focus:border-primary"
+                          min="0"
+                          step="0.5"
+                          value={weight}
+                          onChange={(e) => setWeight(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor={`reps-${exercise.id}`} className="block mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                          Reps
+                        </label>
+                        <input
+                          type="number"
+                          id={`reps-${exercise.id}`}
+                          className="bg-gray-50 border border-gray-300 text-gray-900 text-base rounded-lg focus:ring-primary focus:border-primary block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary dark:focus:border-primary"
+                          min="1"
+                          value={reps}
+                          onChange={(e) => setReps(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      className="mt-3 w-full text-white bg-primary hover:bg-primary-hover focus:ring-4 focus:outline-none focus:ring-primary/50 font-medium rounded-lg text-sm px-5 py-2.5 text-center"
+                    >
+                      <i className="fas fa-plus mr-1"></i> Add Set
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      
+      <div className="mb-6">
+        <label htmlFor="workout-notes" className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+          Workout Notes
+        </label>
+        <textarea
+          id="workout-notes"
+          rows="3"
+          className="bg-gray-50 border border-gray-300 text-gray-900 text-base rounded-lg focus:ring-primary focus:border-primary block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary dark:focus:border-primary"
+          placeholder="Add any notes about this workout..."
+          value={workout.notes}
+          onChange={(e) => updateNotes(e.target.value)}
+        ></textarea>
+      </div>
+      
+      <div className="flex flex-col sm:flex-row gap-3 justify-center">
+        <button
+          type="button"
+          onClick={completeWorkout}
+          className="text-white bg-green-600 hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 font-medium rounded-lg text-base px-5 py-3 text-center dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-700"
+        >
+          <i className="fas fa-check-circle mr-2"></i>
+          Complete Workout
+        </button>
+        <button
+          type="button"
+          onClick={discardWorkout}
+          className="text-gray-700 bg-gray-200 hover:bg-gray-300 focus:ring-4 focus:outline-none focus:ring-gray-100 font-medium rounded-lg text-base px-5 py-3 text-center dark:text-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:focus:ring-gray-700"
+        >
+          <i className="fas fa-times-circle mr-2"></i>
+          Discard Workout
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Workout Summary Component
+const WorkoutSummary = ({ workout }) => {
+  const formatDate = (dateString) => {
+    const options = { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+  
+  const calculateDuration = () => {
+    if (!workout.endTime) return 'N/A';
+    
+    const start = new Date(workout.date);
+    const end = new Date(workout.endTime);
+    const diffMs = end - start;
+    
+    const minutes = Math.floor(diffMs / 60000);
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${remainingMinutes}m`;
+    }
+    return `${minutes}m`;
+  };
+  
+  const totalSets = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+  const totalReps = workout.exercises.reduce((sum, exercise) => {
+    return sum + exercise.sets.reduce((setSum, set) => setSum + set.reps, 0);
+  }, 0);
+  
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold mb-2">Workout Summary</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Date</p>
+            <p className="font-semibold">{formatDate(workout.date)}</p>
+          </div>
+          <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
+            <p className="font-semibold">{calculateDuration()}</p>
+          </div>
+          <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Exercises</p>
+            <p className="font-semibold">{workout.exercises.length}</p>
+          </div>
+          <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Total Sets</p>
+            <p className="font-semibold">{totalSets}</p>
+          </div>
+        </div>
+      </div>
+      
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold mb-4">Exercises</h3>
+        {workout.exercises.length === 0 ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-4">No exercises recorded</p>
+        ) : (
+          <div className="space-y-4">
+            {workout.exercises.map(exercise => (
+              <div key={exercise.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 dark:bg-gray-700 p-3">
+                  <h4 className="font-medium">{exercise.name}</h4>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    {exercise.sets.length} {exercise.sets.length === 1 ? 'set' : 'sets'}, 
+                    {exercise.sets.reduce((sum, set) => sum + set.reps, 0)} reps total
+                  </p>
+                </div>
+                {exercise.sets.length > 0 && (
+                  <div className="p-3">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
+                          <tr>
+                            <th scope="col" className="px-3 py-2">Set</th>
+                            <th scope="col" className="px-3 py-2">Weight</th>
+                            <th scope="col" className="px-3 py-2">Reps</th>
+                            <th scope="col" className="px-3 py-2">Time</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {exercise.sets.map((set, index) => (
+                            <tr key={set.id} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                              <td className="px-3 py-2">{index + 1}</td>
+                              <td className="px-3 py-2">{set.weight} kg</td>
+                              <td className="px-3 py-2">{set.reps}</td>
+                              <td className="px-3 py-2">
+                                {new Date(set.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {workout.notes && (
+        <div>
+          <h3 className="text-xl font-semibold mb-2">Notes</h3>
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <p className="whitespace-pre-line">{workout.notes}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Workout History Component
+const WorkoutHistory = ({ workouts, viewWorkoutDetails, goBack }) => {
+  const sortedWorkouts = [...workouts].sort((a, b) => new Date(b.date) - new Date(a.date));
+  
+  const formatDate = (dateString) => {
+    const options = { 
+      weekday: 'short', 
+      month: 'short', 
+      day: 'numeric',
+      year: 'numeric'
+    };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+  
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 workout-container">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Workout History</h2>
+        <button 
+          onClick={goBack}
+          className="text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary"
+        >
+          <i className="fas fa-arrow-left mr-1"></i> Back
+        </button>
+      </div>
+      
+      {sortedWorkouts.length === 0 ? (
+        <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+          <i className="fas fa-history text-4xl mb-4"></i>
+          <p>No workout history available yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {sortedWorkouts.map(workout => (
+            <div 
+              key={workout.id} 
+              className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+              onClick={() => viewWorkoutDetails(workout.id)}
+            >
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="font-semibold text-lg">
+                    Workout on {formatDate(workout.date)}
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    {workout.exercises.length} exercises, 
+                    {workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0)} sets total
+                  </p>
+                </div>
+                <i className="fas fa-chevron-right text-gray-400"></i>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default App;
